@@ -1,0 +1,197 @@
+---
+title: "Steps in Dwell Time Data Analysis"
+author: "Jessica Kosie"
+date: "September 17, 2017"
+output: word_document
+---
+
+```{r, echo=FALSE}
+
+## CURRENTLY UNDER CONSTRUCTION: IMPROVEMENTS TO CODE NEEDED
+
+#read in the data file
+data <- read.csv('RawDataFile.csv', header=TRUE, na.strings="NA")
+
+View(data)
+
+```
+#################################################################################
+
+# Take a look at the data
+
+#################################################################################
+```{r}
+
+# create a histogram to look at distribution
+hist(data$DwellTime, breaks=100) 
+
+#is it normally distributed?
+#install.packages("nortest")
+library(nortest)
+lillie.test(data$DwellTime) #significant p-value means data is skewed (sig. differs from normal)
+
+```
+#################################################################################
+
+# Check for outliers
+
+#################################################################################
+```{r}
+
+MeanDT <- mean(data$DwellTime, na.rm=TRUE)
+SdDT <- sd(data$DwellTime, na.rm=TRUE) 
+
+Mplus2SD <- MeanDT + 2*SdDT 
+Mplus3SD <- MeanDT + 3*SdDT 
+
+# to examine outliers, make a column with 1s and 0s representing 2 or 3 sd from mean
+
+data$TwoSDAbove <- ifelse(data$DwellTime >= Mplus2SD, 1, 0)
+data$ThreeSDAbove <- ifelse(data$DwellTime >= Mplus3SD, 1, 0)
+
+# how many outliers are there in the entire data set
+
+sum(data$TwoSDAbove, na.rm=TRUE)
+sum(data$TwoSDAbove, na.rm=TRUE)/nrow(data) 
+
+sum(data$ThreeSDAbove, na.rm=TRUE)
+sum(data$ThreeSDAbove, na.rm=TRUE)/nrow(data) 
+
+# check out 3SD above the mean by participant (how much of each participants' total data is more than 3SD above the mean - if it's more than 10% get rid of that participant)
+
+library(doBy)
+ThreeSDSummary <- summaryBy(ThreeSDAbove ~ SubID, data=data, FUN=sum, na.rm=TRUE)
+
+# 345 is the total number of slides for each participant -- this will depend on the slideshow
+ThreeSDSummary$PercentOutliers <- ThreeSDSummary$ThreeSDAbove.sum/345 
+
+# find out which subjects have more than 10% of data 3SD above the mean
+
+toRemove <- ThreeSDSummary[ThreeSDSummary$PercentOutliers > .10, "SubID"] 
+
+# get rid of those individuals
+
+for (i in 1:length(toRemove)){
+    data <- droplevels(subset(data, SubID != toRemove[i]))
+  }
+
+length(unique(data$SubID))
+
+# Now how many values are greater than 3SD above the mean? (will be Winsorizing these)
+
+sum(data$DwellTime >= Mplus3SD, na.rm=TRUE) 
+
+# what percentage of the total is that
+
+sum(data$DwellTime >= Mplus3SD, na.rm=TRUE) / nrow(data) 
+
+```
+#################################################################################
+
+# Winsorize the data - replace all extreme values with the value that is three standards deviation above the mean (e.g., the value for a data point to be classified as an outlier)
+
+#################################################################################
+```{r}
+
+# Winsorizing
+data$DwellTime[data$DwellTime >= Mplus3SD] <- Mplus3SD
+
+```
+#################################################################################
+
+# RATHER THAN WINDSORIZING - treat all values that are >3SD above the mean as missing
+# uncomment code below and comment out the section above to do this
+
+#################################################################################
+```{r}
+
+# how many NAs were already there
+# num.NAs <- sum(is.na(data$DwellTime))
+
+# data$DwellTime[data$DwellTime >= Mplus3SD] <- NA
+
+# how many values did I replace here?
+
+#sum(is.na(data$DwellTime)) - num.NAs #243 matches the number of values that were 3SD above the mean, we're good!
+
+#rm(num.NAs)
+
+
+```
+#################################################################################
+
+# Continuing data prep.
+
+#################################################################################
+```{r}
+
+# remove the excess columns
+
+data$TwoSDAbove <- NULL
+data$ThreeSDAbove <- NULL
+
+# remove files we're done examining
+
+rm(ThreeSDSummary); rm(MeanDT); rm(Mplus2SD); rm(Mplus3SD); rm(SdDT)
+
+```
+#################################################################################
+
+# Milliseconds, Log Transform data and check for normality
+
+#################################################################################
+```{r}
+
+data$MilliDT <- data$DwellTime*1000
+data$logDT <- log10(data$MilliDT)
+
+# take a look at the data now
+hist(data$logDT, breaks=100, xlab = "Log Transformed Dwell Times", main = "Histogram of all Log Transformed Dwell Times") 
+
+#is it normally distributed now?
+
+library(nortest)
+lillie.test(data$logDT) #significant p-value means data is skewed (sig. differs from normal)
+
+```
+#################################################################################
+
+# Option to residualize.
+
+#################################################################################
+```{r}
+
+ my_subjects <- unique(data$SubID)
+
+residual.data <- as.data.frame(setNames(replicate(ncol(data), numeric(0), simplify = F), colnames(data)))
+
+  for (i in my_subjects){
+    subjects_slideshows <- unique(data$Slideshow[data$SubID==i])
+    print(subjects_slideshows)
+    for (j in subjects_slideshows){
+      ## now one can residualize
+      my_temp <- subset(data, SubID==i)
+      my_temp <- subset(my_temp, Slideshow == j)
+      # now my temp has the result of a specific subject and a specific slideshow type
+      # if there is no good fit to a power curve, the residuals are calculated from the mean.
+      model <- nls(logDT ~ a*t^b, data=my_temp, start=list(a=1,b=1), control=nls.control(warnOnly=TRUE), na.action= na.exclude)
+      my_temp$ResidDT <- resid(model)
+      residual.data <- rbind(residual.data,my_temp)
+      rm(my_temp)  
+    }
+  }
+
+
+```
+#################################################################################
+
+# Write Master Data File
+
+#################################################################################
+```{r}
+
+write.csv(data, "MasterData.csv")
+
+```
+
+
